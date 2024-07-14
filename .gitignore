@@ -15,6 +15,7 @@ env/
 venv/
 data/
 **/data*/
+**/timestamps*/
 old/
 
 # directories
