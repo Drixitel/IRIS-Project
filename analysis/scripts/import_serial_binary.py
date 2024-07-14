@@ -1,82 +1,91 @@
-# By Aidan Zinn
-# repo: https://github.com/aidanzinn/Adafruit_Constant_Log/blob/master/import_serial_binary.py
-# Edited by Andrew Yegiayan and Michelle Picardo
+# Remade by Andrew Yegiayan and Michelle Picardo
 # repo: https://github.com/IRIS-Digital-Dosimeter/IRIS-Project/blob/serial_log_binary/analysis/scripts/import_serial_binary.py
+# Originally by Aidan Zinn
+# repo: https://github.com/aidanzinn/Adafruit_Constant_Log/blob/master/import_serial_binary.py
 
+# REQUIRES TWO ADDITIONAL DIRECTORIES IN SCRIPT'S PARENT DIRECTORY: 'data' and 'timestamps'
+
+
+import os
 import serial.tools.list_ports
 from datetime import datetime
-import struct
+import json
 
-def create_new_file():
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_")
-    filename = f'serial_data_{timestamp}.dat'
+FILE_LINES = 20000
+SCHEMA_BYTES = 16
+TIMESTAMP_SAMPLES = 100
+BUFF_SIZE = SCHEMA_BYTES * TIMESTAMP_SAMPLES
+
+def create_new_file(name: str): # returns the file created
+    filename = f'{name}.dat'
     try:
-        return open('data/'+ filename, 'wb')  # Open in binary write mode
+        return open('data/'+ filename, 'wb', buffering=BUFF_SIZE)  # Open in binary write mode and increase buffer size
     except FileNotFoundError:
         print('\nNot Found: "data/"')
         print('Create "data" directory then run this program again')
         return None
 
+def get_formatted_time():
+    return datetime.now().strftime("%Y-%m-%d___%H-%M-%S.%f")
 
-# List of ports available
+
+
+# retrieve the list of available ports
 ports = serial.tools.list_ports.comports()  
 
-
-# Create an empty dict to store the enumerated ports 
+# print out enumerated list of available ports
 print("Available Ports:")
 portsList = {}
 for num, port in enumerate(ports, start=1):               # loop through ports list and save them to the port list
     portsList[num] = port                                 # Save the ports to the dict
-    print(f'{num}: {portsList[num].description}')         # Print them to view them
+    print(f'{num}: {portsList[num].description}')         # Print them in a descriptive format
 
+# get user input for port selection
 val = input("\nSelect Port by number: ")  # Ask the user to declare which Port to use based on the dict above
 selectedPort = portsList[int(val)]        # Save the selected port to a variable
 
-print()
+# get user input for baud rate
+baud = int(input("\nSet baud rate (9600,115200): "))  
 
-# make an instance of the class before populating it
-ser = serial.Serial()  
-
-# set baud
-baud = input("Set baud rate (9600,115200): ")  
-ser.baudrate = int(baud)
-
-# set port 
-ser.port = selectedPort.device
+# open the port with the selected baud rate
+ser = serial.Serial(port=selectedPort.device, baudrate=baud)  
 
 # Open serial
-ser.open()
 ser.reset_input_buffer()  
 ser.flushInput()
 
-# Initialize variables
-file = create_new_file()
-line_count = 0
+# create dict for storing the timestamps in a JSON
 
 
 print()
 print("Starting the logging process...")
 
-while True:
+while True: # each iteration is a new file
     try:
-        if file is None: 
-            break # Exit the loop if file creation failed
+        line_count = 0
+        time_dict = {"sample_timestamps": {}}
+        
+        TIMESTAMP = get_formatted_time() # year-month-day___hour-minute-second.microsecond
+        with create_new_file(TIMESTAMP) as file:  # Open a new file with a new timestamp
+            if file is None: 
+                break # Exit the loop if file creation failed
 
-        ser_bytes = ser.read(16)
-
-        # if len(ser_bytes) == 16:
-        #     value = struct.unpack('<4I', ser_bytes)
-        #     print(f"{value[0]},{value[1]},{value[2]},{value[3]}", end='')
-        #     print()
-
-        file.write(ser_bytes)
-        file.flush()
-        line_count += 1
-
-        if line_count >= 5000:
-            file.close()  # Close the current file
-            file = create_new_file()  # Open a new file with a new timestamp
-            line_count = 0  # Reset line count 
+            
+            while line_count < FILE_LINES: # each iteration is a new line in the file/buffer
+                buffer = b''  # Initialize buffer to store data
+                while len(buffer) < BUFF_SIZE:
+                    buffer += ser.read(SCHEMA_BYTES)
+                    line_count += 1
+                
+                # write the buffer to the file
+                file.write(buffer)
+                time_dict["sample_timestamps"][str(line_count)] = get_formatted_time()
+            
+                
+            json_path = os.path.join('timestamps', f'{os.path.basename(file.name)}.json')
+            with open(json_path, 'w') as json_file:
+                time_dict["JSON_timestamp"] = get_formatted_time()
+                json_file.write(json.dumps(time_dict, indent=4))
 
     except KeyboardInterrupt:
         print("\n\nKeyboard Interrupt: Exiting...")
@@ -85,9 +94,5 @@ while True:
         print("\n\nError:", e)
         break
 
-# Close the current file and the serial connection
-if file is not None:
-    file.close()
+# close the serial connection just in case
 ser.close()
-
-print(ser.is_open())
